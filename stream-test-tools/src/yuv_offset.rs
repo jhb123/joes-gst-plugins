@@ -17,6 +17,7 @@ pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
 mod imp {
     use gst::glib;
     use gst::prelude::*;
+    use gst::State;
     use gst_video::subclass::prelude::*;
     use gst_video::VideoFrameExt;
 
@@ -32,9 +33,98 @@ mod imp {
         )
     });
 
+    const DEFAULT_SHIFT: u8 = 0;
+
+    #[derive(Debug, Clone, Copy)]
+    struct Settings {
+        y: u8,
+        u: u8,
+        v: u8
+    }
+
+    impl Default for Settings {
+        fn default() -> Self {
+            Self { y: DEFAULT_SHIFT, u: DEFAULT_SHIFT, v: DEFAULT_SHIFT }
+        }
+    }
+
     #[derive(Default)]
-    pub struct YuvOffset {}
-    impl ObjectImpl for YuvOffset {}
+    pub struct YuvOffset {
+        settings: Mutex<Settings>,
+        state: Mutex<Option<State>>,
+    }
+
+    impl ObjectImpl for YuvOffset {
+        fn properties() -> &'static [glib::ParamSpec] {
+
+            static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
+                vec![
+                    glib::ParamSpecUChar::builder("y")
+                        .nick("y")
+                        .blurb("Offset applied to the Y plane")
+                        .default_value(DEFAULT_SHIFT)
+                        .mutable_playing()
+                        .build(),
+                        glib::ParamSpecUChar::builder("u")
+                        .nick("u")
+                        .blurb("Offset applied to the U plane")
+                        .default_value(DEFAULT_SHIFT)
+                        .mutable_playing()
+                        .build(),
+                        glib::ParamSpecUChar::builder("v")
+                        .nick("v")
+                        .blurb("Offset applied to the V plane")
+                        .default_value(DEFAULT_SHIFT)
+                        .mutable_playing()
+                        .build(),
+                ]
+            });
+
+            PROPERTIES.as_ref()
+        }
+        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+            match pspec.name() {
+                "y" => {
+                    let mut settings = self.settings.lock().unwrap();
+                    let y = value.get().expect("type checked upstream");
+                    settings.y = y;
+                }
+                "u" => {
+                    let mut settings = self.settings.lock().unwrap();
+                    let u = value.get().expect("type checked upstream");
+                    settings.u = u;
+                }
+                "v" => {
+                    let mut settings = self.settings.lock().unwrap();
+                    let v = value.get().expect("type checked upstream");
+                    settings.v = v;
+                }
+                _ => unimplemented!()
+            }
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "y" => {
+                    let settings = self.settings.lock().unwrap();
+                    settings.y.to_value()
+                }
+                "u" => {
+                    let settings = self.settings.lock().unwrap();
+                    settings.u.to_value()
+                }
+                "v" => {
+                    let settings = self.settings.lock().unwrap();
+                    settings.v.to_value()
+                }
+                _ => unimplemented!()
+            }
+        }
+    
+
+    }
+
+
     impl GstObjectImpl for YuvOffset {}
 
     #[glib::object_subclass]
@@ -49,20 +139,6 @@ mod imp {
         const MODE: gst_base::subclass::BaseTransformMode = gst_base::subclass::BaseTransformMode::NeverInPlace;
         const PASSTHROUGH_ON_SAME_CAPS: bool = false;
         const TRANSFORM_IP_ON_PASSTHROUGH: bool = true;
-        fn transform_caps(
-                &self,
-                direction: gst::PadDirection,
-                caps: &gst::Caps,
-                filter: Option<&gst::Caps>,
-            ) -> Option<gst::Caps> {
-                gst::debug!(
-                    CAT,
-                    imp = self,
-                    "tranforming caps {}",
-                    caps
-                );
-                Some(caps.clone())
-        }
     }
 
     impl ElementImpl for YuvOffset {
@@ -117,10 +193,18 @@ mod imp {
             in_frame: &gst_video::VideoFrameRef<&gst::BufferRef>,
             out_frame: &mut gst_video::VideoFrameRef<&mut gst::BufferRef>,
         ) -> Result <gst::FlowSuccess, gst::FlowError> {
+            let settings = *self.settings.lock().unwrap();
+
             for plane in 0..in_frame.n_planes(){
+                let offset = match plane {
+                    0 => settings.y,
+                    1 => settings.u,
+                    2 => settings.v,
+                    _ => unimplemented!()
+                };
                 let in_plane = in_frame.plane_data(plane).unwrap();
                 let out_plane = out_frame.plane_data_mut(plane).unwrap();
-                out_plane.iter_mut().enumerate().for_each(|(i,x)| {*x=in_plane[i].wrapping_add(200);})
+                out_plane.iter_mut().enumerate().for_each(|(i,x)| {*x=in_plane[i].wrapping_add(offset);})
             }            
             Ok(gst::FlowSuccess::Ok)
         }
