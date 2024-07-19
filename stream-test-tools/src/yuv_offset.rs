@@ -15,6 +15,7 @@ pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
 }
 
 mod imp {
+
     use gst::glib;
     use gst::prelude::*;
     use gst::State;
@@ -25,6 +26,7 @@ mod imp {
 
     use once_cell::sync::Lazy;
 
+    #[allow(dead_code)]
     static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
         gst::DebugCategory::new(
             "yuvOffset",
@@ -33,21 +35,26 @@ mod imp {
         )
     });
 
-    const DEFAULT_SHIFT: u8 = 0;
+    const DEFAULT_SHIFT: i32 = 0;
 
     #[derive(Debug, Clone, Copy)]
     struct Settings {
-        y: u8,
-        u: u8,
-        v: u8
+        y: i32,
+        u: i32,
+        v: i32,
     }
 
     impl Default for Settings {
         fn default() -> Self {
-            Self { y: DEFAULT_SHIFT, u: DEFAULT_SHIFT, v: DEFAULT_SHIFT }
+            Self {
+                y: DEFAULT_SHIFT,
+                u: DEFAULT_SHIFT,
+                v: DEFAULT_SHIFT,
+            }
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Default)]
     pub struct YuvOffset {
         settings: Mutex<Settings>,
@@ -56,22 +63,21 @@ mod imp {
 
     impl ObjectImpl for YuvOffset {
         fn properties() -> &'static [glib::ParamSpec] {
-
             static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
                 vec![
-                    glib::ParamSpecUChar::builder("y")
+                    glib::ParamSpecInt::builder("y")
                         .nick("y")
                         .blurb("Offset applied to the Y plane")
                         .default_value(DEFAULT_SHIFT)
                         .mutable_playing()
                         .build(),
-                        glib::ParamSpecUChar::builder("u")
+                    glib::ParamSpecInt::builder("u")
                         .nick("u")
                         .blurb("Offset applied to the U plane")
                         .default_value(DEFAULT_SHIFT)
                         .mutable_playing()
                         .build(),
-                        glib::ParamSpecUChar::builder("v")
+                    glib::ParamSpecInt::builder("v")
                         .nick("v")
                         .blurb("Offset applied to the V plane")
                         .default_value(DEFAULT_SHIFT)
@@ -99,7 +105,7 @@ mod imp {
                     let v = value.get().expect("type checked upstream");
                     settings.v = v;
                 }
-                _ => unimplemented!()
+                _ => unimplemented!(),
             }
         }
 
@@ -117,13 +123,10 @@ mod imp {
                     let settings = self.settings.lock().unwrap();
                     settings.v.to_value()
                 }
-                _ => unimplemented!()
+                _ => unimplemented!(),
             }
         }
-    
-
     }
-
 
     impl GstObjectImpl for YuvOffset {}
 
@@ -134,9 +137,9 @@ mod imp {
         type ParentType = gst_video::VideoFilter;
     }
 
-
     impl BaseTransformImpl for YuvOffset {
-        const MODE: gst_base::subclass::BaseTransformMode = gst_base::subclass::BaseTransformMode::NeverInPlace;
+        const MODE: gst_base::subclass::BaseTransformMode =
+            gst_base::subclass::BaseTransformMode::NeverInPlace;
         const PASSTHROUGH_ON_SAME_CAPS: bool = false;
         const TRANSFORM_IP_ON_PASSTHROUGH: bool = true;
     }
@@ -151,7 +154,7 @@ mod imp {
                     "Joseph Briggs",
                 )
             });
-    
+
             Some(&*ELEMENT_METADATA)
         }
         fn pad_templates() -> &'static [gst::PadTemplate] {
@@ -160,21 +163,23 @@ mod imp {
                     .format_list([gst_video::VideoFormat::I420])
                     .build();
                 let src_pad_template = gst::PadTemplate::new(
-                    "src", 
-                    gst::PadDirection::Src, 
-                    gst::PadPresence::Always, 
-                    &caps).unwrap();
+                    "src",
+                    gst::PadDirection::Src,
+                    gst::PadPresence::Always,
+                    &caps,
+                )
+                .unwrap();
 
                 let caps = gst_video::VideoCapsBuilder::new()
                     .format_list([gst_video::VideoFormat::I420])
                     .build();
                 let sink_pad_template = gst::PadTemplate::new(
-                    "sink", 
-                    gst::PadDirection::Sink, 
-                    gst::PadPresence::Always, 
-                    &caps).unwrap();
-    
-                
+                    "sink",
+                    gst::PadDirection::Sink,
+                    gst::PadPresence::Always,
+                    &caps,
+                )
+                .unwrap();
 
                 vec![src_pad_template, sink_pad_template]
             });
@@ -183,31 +188,84 @@ mod imp {
         }
     }
 
-    impl YuvOffset {
-
-    }
+    impl YuvOffset {}
 
     impl VideoFilterImpl for YuvOffset {
         fn transform_frame(
             &self,
             in_frame: &gst_video::VideoFrameRef<&gst::BufferRef>,
             out_frame: &mut gst_video::VideoFrameRef<&mut gst::BufferRef>,
-        ) -> Result <gst::FlowSuccess, gst::FlowError> {
+        ) -> Result<gst::FlowSuccess, gst::FlowError> {
             let settings = *self.settings.lock().unwrap();
 
-            for plane in 0..in_frame.n_planes(){
+            for plane in 0..in_frame.n_planes() {
                 let offset = match plane {
                     0 => settings.y,
                     1 => settings.u,
                     2 => settings.v,
-                    _ => unimplemented!()
+                    _ => unreachable!(),
                 };
                 let in_plane = in_frame.plane_data(plane).unwrap();
                 let out_plane = out_frame.plane_data_mut(plane).unwrap();
-                out_plane.iter_mut().enumerate().for_each(|(i,x)| {*x=in_plane[i].wrapping_add(offset);})
-            }            
+                assert_eq!(in_plane.len(), out_plane.len());
+                out_plane.iter_mut().enumerate().for_each(|(i, x)| {
+                    *x = (in_plane[i] as i32).wrapping_add(offset) as u8;
+                })
+            }
             Ok(gst::FlowSuccess::Ok)
         }
     }
-    
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use test::Bencher;
+
+        fn setup_benchmarks(width: u32, height: u32, b: &mut Bencher) {
+            let _ = gst::init();
+            let settings = test::black_box(Settings {
+                y: 10,
+                u: 10,
+                v: 10,
+            });
+            
+            let plugin = YuvOffset {
+                settings: Mutex::new(settings),
+                state: Mutex::new(None),
+            };
+
+            let info = gst_video::VideoInfo::builder(gst_video::VideoFormat::I420, width, height)
+                .build()
+                .unwrap();
+            let data_inframe = vec![0; (width * height * 3) as usize];
+            let buffer_inframe = gst::Buffer::from_slice(data_inframe);
+            let inframe = test::black_box(gst_video::VideoFrame::from_buffer_readable(buffer_inframe, &info).unwrap());
+
+            let data_outframe = vec![0; (width * height * 3) as usize];
+            let buffer_outframe = gst::Buffer::from_slice(data_outframe);
+            let mut outframe = test::black_box(gst_video::VideoFrame::from_buffer_writable(buffer_outframe, &info).unwrap());
+
+            b.iter(|| {
+                plugin.transform_frame(
+                    &inframe.as_video_frame_ref(),
+                    &mut outframe.as_mut_video_frame_ref(),
+                )
+            });
+        }
+
+        #[bench]
+        fn bench_plugin_4k(b: &mut Bencher) {
+            setup_benchmarks(4096, 2160, b);
+        }
+
+        #[bench]
+        fn bench_plugin_1080p(b: &mut Bencher) {
+            setup_benchmarks(1920, 1080, b);
+        }
+
+        #[bench]
+        fn bench_plugin_720p(b: &mut Bencher) {
+            setup_benchmarks(1280, 720, b);
+        }
+    }
 }

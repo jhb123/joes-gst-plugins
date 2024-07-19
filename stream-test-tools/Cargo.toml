@@ -8,10 +8,10 @@ repository = "https://github.com/jhb123/joes-gst-plugins"
 
 
 [dependencies]
-gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", branch = "main" }
-gst-base = { package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", branch = "main" }
-gst-video = { package = "gstreamer-video", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", branch = "main" }
-once_cell = "1.19.0"
+gst = { workspace=true }
+gst-base = { workspace=true }
+gst-video = { workspace=true }
+once_cell = { workspace=true }
 
 [lib]
 name = "stream_test_tools"
@@ -19,4 +19,5 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [build-dependencies]
-gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs" }
+gst-plugin-version-helper = { workspace=true }
+

@@ -1,6 +1,9 @@
+#![feature(test)]
+extern crate test;
+
 use gst::glib;
 
-mod yuv_offset;
+pub mod yuv_offset;
 
 
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
