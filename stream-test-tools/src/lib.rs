@@ -1,5 +1,6 @@
 #![feature(test)]
 #![feature(try_find)]
+#![feature(iter_advance_by)]
 extern crate test;
 
 use gst::glib;

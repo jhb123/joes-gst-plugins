@@ -18,7 +18,7 @@ mod imp {
 
     use gst::glib;
     use gst_video::subclass::prelude::*;
-    use gst_video::VideoFrameExt;
+    use gst_video::{VideoFormat, VideoFrameExt};
 
     use once_cell::sync::Lazy;
 
@@ -102,7 +102,7 @@ mod imp {
         fn pad_templates() -> &'static [gst::PadTemplate] {
             static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
                 let caps = gst_video::VideoCapsBuilder::new()
-                    .format_list([gst_video::VideoFormat::I420])
+                    .format_list([gst_video::VideoFormat::I420, VideoFormat::Rgb])
                     .build();
                 let src_pad_template = gst::PadTemplate::new(
                     "src",
@@ -113,7 +113,7 @@ mod imp {
                 .unwrap();
 
                 let caps = gst_video::VideoCapsBuilder::new()
-                    .format_list([gst_video::VideoFormat::I420])
+                    .format_list([gst_video::VideoFormat::I420, VideoFormat::Rgb])
                     .build();
                 let sink_pad_template = gst::PadTemplate::new(
                     "sink",
@@ -130,7 +130,9 @@ mod imp {
         }
     }
 
-    impl PlaneExpand {}
+    impl PlaneExpand {
+
+    }
 
     impl VideoFilterImpl for PlaneExpand {
 
@@ -142,39 +144,154 @@ mod imp {
 
             assert_eq!(in_frame.width()*3, out_frame.width());
 
-            let in_plane_stride = in_frame.plane_stride();
-            let out_plane_stride = out_frame.plane_stride().to_vec();
-
-            for plane in 0..in_frame.n_planes() {
-
-                let offset = match plane  {
-                    0 => 0,
-                    1 => in_frame.comp_width(1).try_into().unwrap(),
-                    2 => (in_frame.comp_width(1)+in_frame.comp_width(2)).try_into().unwrap(),
-                    _ => unreachable!()
-                };
-
-                let in_plane = in_frame.plane_data(plane).unwrap();
-                let in_lines = in_plane.chunks_exact(in_plane_stride[plane as usize] as usize);
-
-                let out_plane = out_frame.plane_data_mut(plane).unwrap();
-                let out_lines = out_plane.chunks_exact_mut(out_plane_stride[plane as usize] as usize);
-
-                for (in_line, out_line) in std::iter::zip(in_lines,out_lines) {
-                    out_line.fill(125);
-                    out_line[offset..in_line.len()+offset].copy_from_slice(in_line);
-                }
+            match in_frame.n_planes() {
+                1 => single_plane_split(in_frame, out_frame),
+                3 => three_plane_split(in_frame, out_frame),
+                4 => todo!() ,
+                _ => unreachable!()
             }
-            Ok(gst::FlowSuccess::Ok)
+            
         }
     }
 
+    fn single_plane_split(in_frame: &gst_video::VideoFrameRef<&gst::BufferRef>, out_frame: &mut gst_video::VideoFrameRef<&mut gst::BufferRef>) -> Result<gst::FlowSuccess, gst::FlowError> { 
+
+        let in_width = in_frame.width() as usize;
+        let out_width = out_frame.width() as usize;
+        let in_stride = in_frame.plane_stride()[0] as usize;
+        let in_data = in_frame.plane_data(0).unwrap();
+        let out_stride = out_frame.plane_stride()[0] as usize;
+        let out_data = out_frame.plane_data_mut(0).unwrap();
+
+        let in_line_bytes = in_width * 3;
+        let out_line_bytes = out_width * 3;
+        assert!(in_line_bytes <= in_stride);
+        assert!(out_line_bytes <= out_stride);
+
+        for (in_line, out_line) in in_data
+                .chunks_exact(in_stride)
+                .zip(out_data.chunks_exact_mut(out_stride))
+            {
+                out_line.fill(0);
+                for (pix_idx, in_p) in in_line[..in_line_bytes].chunks_exact(3).enumerate() {
+                    out_line[3*(pix_idx)] = in_p[0];
+                    out_line[3*in_width+3*(pix_idx)+1] = in_p[1];
+                    out_line[6*in_width+3*(pix_idx)+2] = in_p[2];
+                }
+        }
+        Ok(gst::FlowSuccess::Ok)
+    }
+
+    fn three_plane_split(in_frame: &gst_video::VideoFrameRef<&gst::BufferRef>, out_frame: &mut gst_video::VideoFrameRef<&mut gst::BufferRef>) -> Result<gst::FlowSuccess, gst::FlowError> {
+        let in_plane_stride = in_frame.plane_stride();
+        let out_plane_stride = out_frame.plane_stride().to_vec();
+    
+        for plane in 0..3 {
+    
+            let offset = match plane  {
+                0 => 0,
+                1 => in_frame.comp_width(1).try_into().unwrap(),
+                2 => (in_frame.comp_width(1)+in_frame.comp_width(2)).try_into().unwrap(),
+                _ => unreachable!()
+            };
+    
+            let in_plane = in_frame.plane_data(plane).unwrap();
+            let in_lines = in_plane.chunks_exact(in_plane_stride[plane as usize] as usize);
+    
+            let out_plane = out_frame.plane_data_mut(plane).unwrap();
+            let out_lines = out_plane.chunks_exact_mut(out_plane_stride[plane as usize] as usize);
+    
+            for (in_line, out_line) in std::iter::zip(in_lines,out_lines) {
+                out_line.fill(125);
+                out_line[offset..in_line.len()+offset].copy_from_slice(in_line);
+            }
+        }
+        Ok(gst::FlowSuccess::Ok)
+    }
+    
     #[cfg(test)]
     mod tests {
         use super::*;
         use test::Bencher;
 
-        fn setup_benchmarks(width: u32, height: u32, b: &mut Bencher) {
+        #[test]
+        fn test_rgb_transform_red(){
+            let data_inframe = [255,0,0,0,255,0,0,0];
+            let outframe = run_plugin_rgb_tests(data_inframe);
+            assert_eq!(outframe.plane_data(0).unwrap(),[255,0,0,0, 0,0,0,0, 0,0,0,0, 255,0,0,0, 0,0,0,0, 0,0,0,0,]);
+        }
+
+        #[test]
+        fn test_rgb_transform_green(){
+            let data_inframe = [0,255,0,0,0,255,0,0];
+            let outframe = run_plugin_rgb_tests(data_inframe);
+            assert_eq!(outframe.plane_data(0).unwrap(),[0,0,0,0, 255,0 ,0,0, 0,0,0,0, 0,0,0,0, 255,0,0,0, 0,0,0,0,]);
+        }
+
+        #[test]
+        fn test_rgb_transform_blue(){
+            let data_inframe = [0,0,255,0,0,0,255,0];
+            let outframe = run_plugin_rgb_tests(data_inframe);
+            assert_eq!(outframe.plane_data(0).unwrap(),[0,0,0,0, 0,0,0,0, 255,0,0,0, 0,0,0,0, 0,0,0,0, 255, 0,0,0,]);
+        }
+
+
+        fn run_plugin_rgb_tests(data_inframe: [u8; 8]) -> gst_video::VideoFrame<gst_video::video_frame::Writable> {
+            let _ = gst::init();
+        
+            const WIDTH: u32 = 1;
+            const HEIGHT: u32 = 2;
+        
+            let plugin = PlaneExpand {};
+        
+            let info = gst_video::VideoInfo::builder(gst_video::VideoFormat::Rgb, WIDTH, HEIGHT)
+                .build()
+                .unwrap();
+            let buffer_inframe = gst::Buffer::from_slice(data_inframe);
+            let inframe = gst_video::VideoFrame::from_buffer_readable(buffer_inframe, &info).unwrap();
+                
+            let info = gst_video::VideoInfo::builder(gst_video::VideoFormat::Rgb, WIDTH*3, HEIGHT)
+                .build()
+                .unwrap();
+            let data_outframe = [0; (WIDTH * HEIGHT * 4 * 3 ) as usize];
+            let buffer_outframe = gst::Buffer::from_slice(data_outframe);
+            let mut outframe = gst_video::VideoFrame::from_buffer_writable(buffer_outframe, &info).unwrap();
+            let _ = plugin.transform_frame(
+                &inframe.as_video_frame_ref(),
+                &mut outframe.as_mut_video_frame_ref(),
+            );
+            outframe
+        }
+        
+        fn setup_benchmarks_rgb(width: u32, height: u32, b: &mut Bencher) {
+            let _ = gst::init();
+           
+            let plugin = PlaneExpand {};
+
+            let info = gst_video::VideoInfo::builder(gst_video::VideoFormat::Rgb, width, height)
+                .build()
+                .unwrap();
+            let data_inframe = vec![0; (width * height * 3) as usize];
+            let buffer_inframe = gst::Buffer::from_slice(data_inframe);
+            let inframe = test::black_box(gst_video::VideoFrame::from_buffer_readable(buffer_inframe, &info).unwrap());
+
+            let info = gst_video::VideoInfo::builder(gst_video::VideoFormat::Rgb, width*3, height)
+                .build()
+                .unwrap();
+            let data_outframe = vec![0; (width * 3 * height * 3) as usize];
+            let buffer_outframe = gst::Buffer::from_slice(data_outframe);
+            let mut outframe = test::black_box(gst_video::VideoFrame::from_buffer_writable(buffer_outframe, &info).unwrap());
+
+            b.iter(|| {
+                plugin.transform_frame(
+                    &inframe.as_video_frame_ref(),
+                    &mut outframe.as_mut_video_frame_ref(),
+                )
+            });
+        }
+
+
+        fn setup_benchmarks_yuv(width: u32, height: u32, b: &mut Bencher) {
             let _ = gst::init();
            
             let plugin = PlaneExpand {};
@@ -202,18 +319,33 @@ mod imp {
         }
 
         #[bench]
-        fn bench_plugin_4k(b: &mut Bencher) {
-            setup_benchmarks(4096, 2160, b);
+        fn bench_plugin_4k_yuv(b: &mut Bencher) {
+            setup_benchmarks_yuv(4096, 2160, b);
         }
 
         #[bench]
-        fn bench_plugin_1080p(b: &mut Bencher) {
-            setup_benchmarks(1920, 1080, b);
+        fn bench_plugin_1080p_yuv(b: &mut Bencher) {
+            setup_benchmarks_yuv(1920, 1080, b);
         }
 
         #[bench]
-        fn bench_plugin_720p(b: &mut Bencher) {
-            setup_benchmarks(1280, 720, b);
+        fn bench_plugin_720p_yuv(b: &mut Bencher) {
+            setup_benchmarks_yuv(1280, 720, b);
+        }
+
+        #[bench]
+        fn bench_plugin_4k_rgb(b: &mut Bencher) {
+            setup_benchmarks_rgb(4096, 2160, b);
+        }
+
+        #[bench]
+        fn bench_plugin_1080p_rgb(b: &mut Bencher) {
+            setup_benchmarks_rgb(1920, 1080, b);
+        }
+
+        #[bench]
+        fn bench_plugin_720p_rgb(b: &mut Bencher) {
+            setup_benchmarks_rgb(1280, 720, b);
         }
 
     }
