@@ -1,13 +1,15 @@
 #![feature(test)]
+#![feature(try_find)]
 extern crate test;
 
 use gst::glib;
 
-pub mod yuv_offset;
-
+mod yuv_offset;
+mod plane_expand;
 
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     yuv_offset::register(plugin)?;
+    plane_expand::register(plugin)?;
     Ok(())
 }
 
